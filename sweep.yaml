@@ -1,0 +1,8 @@
+gha_enabled: True
+branch: main
+blocked_dirs: [".github/"]
+draft: False
+description: 'The program initiates by activating its listening capability for specific keywords. Upon detecting the keyword "computer," it starts an audio recording session. The recording continues until the keyword "reply" is heard, which signals the end of the recording. Additionally, if the keyword "snapshot" is detected during the recording, the program captures an image immediately. After the recording ends, the audio file is sent to Assembly AI for transcription. The program then needs to decide how to handle this transcription based on the context of ongoing conversations. It checks if there is an existing thread that was recently interacted with (within the last 90 seconds). This check is facilitated by a variable that tracks the state change when a message is received back from the assistant. Depending on whether a recent thread exists, the program either creates a new thread for the transcription or adds the transcription to the last active thread. After establishing where the transcription should go, it initiates a stream on the chosen thread to continue the interaction. This process is designed to ensure that the program can effectively manage and continue conversations based on user inputs and the temporal context of interactions.'
+rules:
+  - "use lots of print statements so I can debug"
+  - "using popular simple methods, ensure robust detailed logging of every state change and program run, that saves sequential running information so we can track the history of development"
