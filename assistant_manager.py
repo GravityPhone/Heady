@@ -1,8 +1,28 @@
 import openai
 from logging_module import log
-from Assistant import Assistant
+
 from typing_extensions import override
 import time
+
+from abc import ABC, abstractmethod
+
+class Assistant(ABC):
+    
+    @abstractmethod
+    def on_text_created(self, text) -> None:
+        pass
+
+    @abstractmethod
+    def on_text_delta(self, delta, snapshot):
+        pass
+
+    @abstractmethod
+    def on_tool_call_created(self, tool_call):
+        pass
+
+    @abstractmethod
+    def on_tool_call_delta(self, delta, snapshot):
+        pass
 
 class EventHandler(Assistant):    
   @override
