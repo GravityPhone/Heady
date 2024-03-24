@@ -57,10 +57,31 @@ class AssistantManager:
             thread = self.client.beta.threads.create()
             global_thread_id = thread.id  # Update the global variable
             self.thread_id = thread.id  # Update the thread_id attribute
-            return thread.id
+            print(f"New thread created: {self.thread_id}")
+            return self.thread_id
         except Exception as e:
             print(f"Failed to create a thread: {e}")
             return None
+
+    def add_message_to_thread(self, content):
+        if not self.thread_id:
+            print("No thread ID set. Cannot add message.")
+            return
+
+        try:
+            message = self.client.beta.threads.messages.create(
+                thread_id=self.thread_id,
+                role="user",
+                content=content
+            )
+            print(f"Message added to thread: {self.thread_id}")
+        except Exception as e:
+            print(f"Failed to add message to thread: {e}")
+
+    def handle_initial_interaction(self, content):
+        if not self.thread_id:
+            self.create_thread()  # Create a new thread if none exists
+        self.add_message_to_thread(content)  # Add the initial message to the thread
 
     def handle_streaming_interaction(self):
         if not self.thread_id or not self.assistant_id:

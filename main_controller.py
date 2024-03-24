@@ -32,6 +32,9 @@ concatenated_text = ""
 # Global set to track processed message IDs
 processed_messages = set()
 
+# Global variable for transcription
+transcription = ""
+
 def handle_detected_words(words):
     global is_recording, picture_mode, last_thread_id, last_interaction_time
     detected_phrase = ' '.join(words).lower().strip()
@@ -51,89 +54,74 @@ def handle_detected_words(words):
         process_recording()
 
 def process_recording():
-    global picture_mode, last_thread_id, last_interaction_time
+    global picture_mode, last_thread_id, last_interaction_time, transcription, assistant_manager
     transcription = assemblyai_transcriber.transcribe_audio_file("recorded_audio.wav")
     print(f"Transcription result: '{transcription}'")
+
+    assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+
+    assistant_manager.handle_initial_interaction(content=transcription)
 
     if picture_mode:
         vision_module.capture_image_async()
         description = vision_module.describe_captured_image(transcription=transcription)
-        # Handle the image description through streaming interaction
         interact_with_assistant(description)
         picture_mode = False
     else:
-        # Handle the transcription through streaming interaction
         interact_with_assistant(transcription)
 
 class CustomAssistantEventHandler(AssistantEventHandler):
     def __init__(self, eleven_labs_manager):
         self.eleven_labs_manager = eleven_labs_manager
-        self.complete_response = ""  # Initialize an empty string to accumulate the response
+        self.complete_response = ""  
 
     def on_text_created(self, text) -> None:
-        # This method might still be useful if you receive complete text responses directly.
-        self.complete_response += text  # Append the text to the complete response
+        self.complete_response += text  
         self.play_response()
 
     def on_text_delta(self, delta, snapshot):
-        # Check if 'delta' contains 'content' changes
-        if 'content' in delta:  # Corrected access
-            # Iterate through each content change
-            for content_change in delta['content']:  # Corrected access
-                # Check if the content change is of type 'text'
+        if 'content' in delta:  
+            for content_change in delta['content']:  
                 if content_change['type'] == 'text':
-                    # Extract the text value
                     text_value = content_change['text']['value']
-                    # Print the text value
                     print(text_value, end="", flush=True)
-                    # Concatenate the text value to the global variable
                     global concatenated_text
                     concatenated_text += text_value
 
     def play_response(self):
-        # Check if the complete response is not empty
         if self.complete_response.strip():
-            # Use ElevenLabsManager to play back the text.
-            print(f"Playing message: {self.complete_response}")  # Print statement before playing
+            print(f"Playing message: {self.complete_response}")  
             self.eleven_labs_manager.play_text(self.complete_response)
-            self.complete_response = ""  # Reset the complete response for the next interaction
+            self.complete_response = ""  
 
 def process_and_play_text():
     global concatenated_text
-    # Use regular expression to split the text by '.' or '?' or '\n'
     sentences = re.split(r'[.?\n]+', concatenated_text)
-    # Remove any empty strings that may result from split and strip whitespace
     sentences = [sentence.strip() for sentence in sentences if sentence]
 
-    # Play each sentence using ElevenLabsManager
     for sentence in sentences:
         print(f"Playing: {sentence}")
         eleven_labs_manager.play_text(sentence)
 
-    # Reset the concatenated text for the next interaction
     concatenated_text = ""
 
 def interact_with_assistant(transcription):
     global last_thread_id, last_interaction_time
-    print("Interacting with assistant...")  # Debug print
+    print("Interacting with assistant...")  
 
-    # Instantiate CustomAssistantEventHandler
     custom_event_handler = CustomAssistantEventHandler(eleven_labs_manager)
-
-    # Instantiate AssistantManager with required arguments
     assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
-
-    # Pass the custom event handler to AssistantManager
     assistant_manager.set_event_handler(custom_event_handler)
 
-    # Check if a new thread needs to be created or if an existing one can be used
-    if not last_thread_id or time.time() - last_interaction_time > 90:
-        print("Creating new thread...")  # Debug print
-        last_thread_id = assistant_manager.create_thread()
+    if last_thread_id and time.time() - last_interaction_time <= 90:
+        print(f"Using existing thread: {last_thread_id}")
         assistant_manager.thread_id = last_thread_id
     else:
-        print(f"Using existing thread: {last_thread_id}")  # Debug print
+        print("Creating new thread...")
+        last_thread_id = assistant_manager.create_thread()
+        assistant_manager.thread_id = last_thread_id
 
+    assistant_manager.add_message_to_thread(transcription)
     last_interaction_time = time.time()
 
     assistant_manager.handle_streaming_interaction()
@@ -146,31 +134,24 @@ def on_thread_message_completed(data):
         return
     processed_messages.add(message_id)
     print("Handling ThreadMessageCompleted event...")
-    # Extract and print the message content
     message_content = data.get('content', [])
     for content_block in message_content:
         if content_block['type'] == 'text':
             message_text = content_block['text']['value']
             print(f"Received message: {message_text}")
-            # Use ElevenLabsManager to play back the text
-            print(f"Playing message: {message_text}")  # Print statement before playing
+            print(f"Playing message: {message_text}")  
             eleven_labs_manager.play_text(message_text)
 
-    # Restart keyword detection after processing the message
-    
     setup_keyword_detection()
 
     last_thread_id = data.get('thread_id')
     
     
 
-# Map event types to handler functions
 event_handlers = {
     'thread.message.completed': on_thread_message_completed,
-    # Add other event handlers here as needed
 }
 
-# Dispatcher function
 def dispatch_event(event_type, data):
     handler = event_handlers.get(event_type)
     if handler:
@@ -179,23 +160,16 @@ def dispatch_event(event_type, data):
         print(f"No handler for event type: {event_type}")
 
 def on_thread_run_step_completed(data):
-    # Extract the message content from the completed run step data
     message_content = data.get('content', [])
-    # Initialize an empty string to accumulate the response text
     response_text = ""
-    # Iterate through the content blocks to concatenate the text
     for content_block in message_content:
         if content_block['type'] == 'text':
             response_text += content_block['text']['value']
-    # Check if the response text is not empty
     if response_text.strip():
-        # Use ElevenLabsManager to play back the text
-        print(f"Playing response: {response_text}")  # Print statement before playing
+        print(f"Playing response: {response_text}")  
         eleven_labs_manager.play_text(response_text)
         print(f"Playing response: {response_text}")
-    #assignn current thread id to last_thread_id
     last_thread_id = data.get('thread_id')
-    # Restart keyword detection after playing the response
     setup_keyword_detection()
 
 
