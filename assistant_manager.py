@@ -1,5 +1,5 @@
 import openai
-import time  # Ensure time is imported
+import time
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
 from openai.types.beta.threads import Run, RequiredActionFunctionToolCall
@@ -35,35 +35,29 @@ class EventHandler(AssistantEventHandler):
                     if output.type == "logs":
                         print(f"\n{output.logs}", flush=True)
 
-# Global variable to store the thread_id
-global_thread_id = None
 
-def get_global_thread_id():
-    return global_thread_id
 
 class AssistantManager:
-    def __init__(self, client, eleven_labs_manager, thread_id=None, assistant_id=None):
+    def __init__(self, client, eleven_labs_manager, assistant_id=None):
         self.client = client
-        self.eleven_labs_manager = eleven_labs_manager  # ElevenLabsManager instance for text-to-speech
-        self.thread_id = thread_id
+        self.eleven_labs_manager = eleven_labs_manager
         self.assistant_id = assistant_id
-        self.event_handler = None  # Initialize event_handler attribute
-        self.last_interaction_time = None  # Track the last interaction time
+        self.event_handler = None
+        self.thread_id = None
+        self.last_interaction_time = None
+        self.interaction_in_progress = False
 
     def set_event_handler(self, event_handler):
         self.event_handler = event_handler
 
     def create_thread(self):
-        global global_thread_id
-        # Check if a thread already exists
         if self.thread_id is not None:
             print(f"Thread already exists: {self.thread_id}")
             return self.thread_id
 
         try:
             thread = self.client.beta.threads.create()
-            global_thread_id = thread.id  # Update the global variable
-            self.thread_id = thread.id  # Update the thread_id attribute
+            self.thread_id = thread.id
             print(f"New thread created: {self.thread_id}")
             return self.thread_id
         except Exception as e:
@@ -88,33 +82,27 @@ class AssistantManager:
     def handle_interaction(self, content):
         if self.should_create_new_thread():
             self.create_thread()
-        else:
-            print(f"Using existing thread: {self.thread_id}")
 
         self.add_message_to_thread(content)
-        self.last_interaction_time = time.time()  # Update the last interaction time after handling
+        self.last_interaction_time = time.time()
+        self.interaction_in_progress = True
 
     def should_create_new_thread(self):
-        if self.thread_id is None:
+        # Create a new thread if there's no existing thread or if the last interaction was too long ago
+        if self.thread_id is None or time.time() - self.last_interaction_time > 90:
             return True
-
-        if self.last_interaction_time is None:  # If there's no last interaction time, create a new thread
-            return True
-
-        elapsed_time = time.time() - self.last_interaction_time
-        if elapsed_time > 90:  # If more than 90 seconds have passed
-            return True
-
-        return False
+        # Avoid creating a new thread if the previous interaction is still in progress
+        if self.interaction_in_progress:
+            return False
+        return True
 
     def handle_streaming_interaction(self):
         if not self.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
             return
 
-        event_handler = self.event_handler if self.event_handler else EventHandler()  # Use set event handler if available
+        event_handler = self.event_handler if self.event_handler else EventHandler()
 
-        # Create a new run within the existing thread
         with self.client.beta.threads.runs.create_and_stream(
             thread_id=self.thread_id,
             assistant_id=self.assistant_id,
@@ -142,3 +130,7 @@ class AssistantManager:
                     print("\nInteraction failed.")
                     break  # Exit the loop if the interaction fails
                 # Add more event types as needed based on your application's requirements
+
+
+
+    # Additional methods as needed...
