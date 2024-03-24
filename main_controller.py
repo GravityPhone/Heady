@@ -17,7 +17,6 @@ openai_client = openai # This line initializes openai_client with the openai lib
 # Initialize modules with provided API keys
 assemblyai_transcriber = AssemblyAITranscriber(api_key=os.getenv("ASSEMBLYAI_API_KEY"))
 # Adjusted to use the hardcoded Assistant ID
-assistant_manager = AssistantManager(client=openai_client, thread_id=None, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
 eleven_labs_manager = ElevenLabsManager(api_key=os.getenv("ELEVENLABS_API_KEY"))
 vision_module = VisionModule(openai_api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -29,6 +28,9 @@ last_interaction_time = None
 
 # Global variable to hold the concatenated text
 concatenated_text = ""
+
+# Global set to track processed message IDs
+processed_messages = set()
 
 def handle_detected_words(words):
     global is_recording, picture_mode, last_thread_id, last_interaction_time
@@ -92,6 +94,7 @@ class CustomAssistantEventHandler(AssistantEventHandler):
         # Check if the complete response is not empty
         if self.complete_response.strip():
             # Use ElevenLabsManager to play back the text.
+            print(f"Playing message: {self.complete_response}")  # Print statement before playing
             self.eleven_labs_manager.play_text(self.complete_response)
             self.complete_response = ""  # Reset the complete response for the next interaction
 
@@ -117,8 +120,10 @@ def interact_with_assistant(transcription):
     # Instantiate CustomAssistantEventHandler
     custom_event_handler = CustomAssistantEventHandler(eleven_labs_manager)
 
+    # Instantiate AssistantManager with required arguments
+    assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+
     # Pass the custom event handler to AssistantManager
-    # This assumes AssistantManager has been adjusted to accept an event handler
     assistant_manager.set_event_handler(custom_event_handler)
 
     # Check if a new thread needs to be created or if an existing one can be used
@@ -130,14 +135,16 @@ def interact_with_assistant(transcription):
         print(f"Using existing thread: {last_thread_id}")  # Debug print
 
     last_interaction_time = time.time()
-    instructions = f"Based on the transcription, interact with the user. Transcription: {transcription}"
-    print(f"Sending instructions to assistant: {instructions}")  # Debug print
 
-    # Assuming handle_streaming_interaction is the method to send instructions
-    # and it's correctly implemented in AssistantManager.
-    assistant_manager.handle_streaming_interaction(instructions)
+    assistant_manager.handle_streaming_interaction()
 
 def on_thread_message_completed(data):
+    global processed_messages, last_thread_id
+    message_id = data.get('id')
+    if message_id in processed_messages:
+        print(f"Message {message_id} already processed.")
+        return
+    processed_messages.add(message_id)
     print("Handling ThreadMessageCompleted event...")
     # Extract and print the message content
     message_content = data.get('content', [])
@@ -146,7 +153,16 @@ def on_thread_message_completed(data):
             message_text = content_block['text']['value']
             print(f"Received message: {message_text}")
             # Use ElevenLabsManager to play back the text
+            print(f"Playing message: {message_text}")  # Print statement before playing
             eleven_labs_manager.play_text(message_text)
+
+    # Restart keyword detection after processing the message
+    
+    setup_keyword_detection()
+
+    last_thread_id = data.get('thread_id')
+    
+    
 
 # Map event types to handler functions
 event_handlers = {
@@ -174,8 +190,14 @@ def on_thread_run_step_completed(data):
     # Check if the response text is not empty
     if response_text.strip():
         # Use ElevenLabsManager to play back the text
+        print(f"Playing response: {response_text}")  # Print statement before playing
         eleven_labs_manager.play_text(response_text)
         print(f"Playing response: {response_text}")
+    #assignn current thread id to last_thread_id
+    last_thread_id = data.get('thread_id')
+    # Restart keyword detection after playing the response
+    setup_keyword_detection()
+
 
 def initialize():
     print("System initializing...")
@@ -186,7 +208,7 @@ if __name__ == "__main__":
     initialize()
     while True:
         time.sleep(1)
-        # Simulate receiving an event
+        
         event_received = {
             'event': 'thread.message.completed',
             'data': {
