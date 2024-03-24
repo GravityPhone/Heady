@@ -19,6 +19,7 @@ Use AssemblyAITranscriber for audio file transcription.
 Implement logic in process_recording() to handle transcription and optionally capture and describe images using VisionModule if picture_mode is activated.
 AI Interaction and Thread Management:
 In interact_with_assistant(transcription), check for an existing thread or create a new one using AssistantManager.create_thread().
+ however,  if it has been less than ninety seconds since our last interaction,  we add to the existing thread.
 Send transcription to the assistant and manage streaming responses using AssistantManager.handle_streaming_interaction(instructions).
 
 after interaction pass thread_id into last_thread_id
