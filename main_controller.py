@@ -59,8 +59,10 @@ def process_recording():
     print(f"Transcription result: '{transcription}'")
 
     assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+    assistant_manager.handle_interaction(content=transcription)
 
-    assistant_manager.handle_initial_interaction(content=transcription)
+    last_thread_id = assistant_manager.thread_id
+    last_interaction_time = assistant_manager.last_interaction_time
 
     if picture_mode:
         vision_module.capture_image_async()
@@ -112,17 +114,10 @@ def interact_with_assistant(transcription):
     custom_event_handler = CustomAssistantEventHandler(eleven_labs_manager)
     assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
     assistant_manager.set_event_handler(custom_event_handler)
+    assistant_manager.handle_interaction(content=transcription)
 
-    if last_thread_id and time.time() - last_interaction_time <= 90:
-        print(f"Using existing thread: {last_thread_id}")
-        assistant_manager.thread_id = last_thread_id
-    else:
-        print("Creating new thread...")
-        last_thread_id = assistant_manager.create_thread()
-        assistant_manager.thread_id = last_thread_id
-
-    assistant_manager.add_message_to_thread(transcription)
-    last_interaction_time = time.time()
+    last_thread_id = assistant_manager.thread_id
+    last_interaction_time = assistant_manager.last_interaction_time
 
     assistant_manager.handle_streaming_interaction()
 

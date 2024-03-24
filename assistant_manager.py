@@ -1,4 +1,5 @@
 import openai
+import time  # Ensure time is imported
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
 from openai.types.beta.threads import Run, RequiredActionFunctionToolCall
@@ -47,12 +48,18 @@ class AssistantManager:
         self.thread_id = thread_id
         self.assistant_id = assistant_id
         self.event_handler = None  # Initialize event_handler attribute
+        self.last_interaction_time = None  # Track the last interaction time
 
     def set_event_handler(self, event_handler):
         self.event_handler = event_handler
 
     def create_thread(self):
         global global_thread_id
+        # Check if a thread already exists
+        if self.thread_id is not None:
+            print(f"Thread already exists: {self.thread_id}")
+            return self.thread_id
+
         try:
             thread = self.client.beta.threads.create()
             global_thread_id = thread.id  # Update the global variable
@@ -78,10 +85,27 @@ class AssistantManager:
         except Exception as e:
             print(f"Failed to add message to thread: {e}")
 
-    def handle_initial_interaction(self, content):
-        if not self.thread_id:
-            self.create_thread()  # Create a new thread if none exists
-        self.add_message_to_thread(content)  # Add the initial message to the thread
+    def handle_interaction(self, content):
+        if self.should_create_new_thread():
+            self.create_thread()
+        else:
+            print(f"Using existing thread: {self.thread_id}")
+
+        self.add_message_to_thread(content)
+        self.last_interaction_time = time.time()  # Update the last interaction time after handling
+
+    def should_create_new_thread(self):
+        if self.thread_id is None:
+            return True
+
+        if self.last_interaction_time is None:  # If there's no last interaction time, create a new thread
+            return True
+
+        elapsed_time = time.time() - self.last_interaction_time
+        if elapsed_time > 90:  # If more than 90 seconds have passed
+            return True
+
+        return False
 
     def handle_streaming_interaction(self):
         if not self.thread_id or not self.assistant_id:
@@ -90,10 +114,10 @@ class AssistantManager:
 
         event_handler = self.event_handler if self.event_handler else EventHandler()  # Use set event handler if available
 
+        # Create a new run within the existing thread
         with self.client.beta.threads.runs.create_and_stream(
             thread_id=self.thread_id,
             assistant_id=self.assistant_id,
-
         ) as stream:
             for event in stream:
                 print("Event received:", event)  # Debug print to confirm events are received
