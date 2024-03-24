@@ -34,9 +34,16 @@ class EventHandler(AssistantEventHandler):
                     if output.type == "logs":
                         print(f"\n{output.logs}", flush=True)
 
+# Global variable to store the thread_id
+global_thread_id = None
+
+def get_global_thread_id():
+    return global_thread_id
+
 class AssistantManager:
-    def __init__(self, client, thread_id=None, assistant_id=None):
+    def __init__(self, client, eleven_labs_manager, thread_id=None, assistant_id=None):
         self.client = client
+        self.eleven_labs_manager = eleven_labs_manager  # ElevenLabsManager instance for text-to-speech
         self.thread_id = thread_id
         self.assistant_id = assistant_id
         self.event_handler = None  # Initialize event_handler attribute
@@ -45,15 +52,17 @@ class AssistantManager:
         self.event_handler = event_handler
 
     def create_thread(self):
+        global global_thread_id
         try:
             thread = self.client.beta.threads.create()
+            global_thread_id = thread.id  # Update the global variable
             self.thread_id = thread.id  # Update the thread_id attribute
             return thread.id
         except Exception as e:
             print(f"Failed to create a thread: {e}")
             return None
 
-    def handle_streaming_interaction(self, instructions: str):
+    def handle_streaming_interaction(self):
         if not self.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
             return
@@ -63,13 +72,22 @@ class AssistantManager:
         with self.client.beta.threads.runs.create_and_stream(
             thread_id=self.thread_id,
             assistant_id=self.assistant_id,
-            instructions=instructions,
+
         ) as stream:
             for event in stream:
                 print("Event received:", event)  # Debug print to confirm events are received
-                # Now, instead of passing, you handle each event with your event handler
+                # Handle the message content for events with a 'data' attribute containing a message
+                if hasattr(event, 'data') and hasattr(event.data, 'content'):
+                    for content_block in event.data.content:
+                        if content_block.type == 'text':
+                            message_text = content_block.text.value
+                            print(f"Playing message: {message_text}")  # Print statement before playing
+                            self.eleven_labs_manager.play_text(message_text)  # Play the text using ElevenLabsManager
+                            print("Message played using ElevenLabsManager.")  # Print statement after playing
+                            break  # Assuming you only want to print and play the first text block
+                # Existing event handling logic
                 if isinstance(event, ThreadMessageDelta):
-                    event_handler.on_text_delta(event.data.delta, None)  # Adjusted to include 'None' for the missing 'snapshot' argument and correctly access delta
+                    event_handler.on_text_delta(event.data.delta, None)
                 elif isinstance(event, ThreadRunRequiresAction):
                     event_handler.on_tool_call_created(event.tool_call)
                 elif isinstance(event, ThreadRunCompleted):
