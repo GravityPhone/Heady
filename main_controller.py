@@ -4,7 +4,7 @@ import re
 from word_detector import setup_keyword_detection, set_message_handler
 from audio_recorder import start_recording, stop_recording
 from assemblyai_transcriber import AssemblyAITranscriber
-from assistant_manager import AssistantManager
+from assistant_manager import ThreadManager, StreamingManager
 from eleven_labs_manager import ElevenLabsManager
 from vision_module import VisionModule
 import openai
@@ -35,6 +35,10 @@ processed_messages = set()
 # Global variable for transcription
 transcription = ""
 
+# Initialize ThreadManager and StreamingManager
+thread_manager = ThreadManager(openai_client)
+streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+
 def handle_detected_words(words):
     global is_recording, picture_mode, last_thread_id, last_interaction_time
     detected_phrase = ' '.join(words).lower().strip()
@@ -54,15 +58,11 @@ def handle_detected_words(words):
         process_recording()
 
 def process_recording():
-    global picture_mode, last_thread_id, last_interaction_time, transcription, assistant_manager
+    global picture_mode, last_thread_id, last_interaction_time, transcription
     transcription = assemblyai_transcriber.transcribe_audio_file("recorded_audio.wav")
     print(f"Transcription result: '{transcription}'")
 
-    assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
-    assistant_manager.handle_interaction(content=transcription)
-
-    last_thread_id = assistant_manager.thread_id
-    last_interaction_time = assistant_manager.last_interaction_time
+    thread_manager.handle_interaction(content=transcription)
 
     if picture_mode:
         vision_module.capture_image_async()
@@ -72,54 +72,10 @@ def process_recording():
     else:
         interact_with_assistant(transcription)
 
-class CustomAssistantEventHandler(AssistantEventHandler):
-    def __init__(self, eleven_labs_manager):
-        self.eleven_labs_manager = eleven_labs_manager
-        self.complete_response = ""  
-
-    def on_text_created(self, text) -> None:
-        self.complete_response += text  
-        self.play_response()
-
-    def on_text_delta(self, delta, snapshot):
-        if 'content' in delta:  
-            for content_change in delta['content']:  
-                if content_change['type'] == 'text':
-                    text_value = content_change['text']['value']
-                    print(text_value, end="", flush=True)
-                    global concatenated_text
-                    concatenated_text += text_value
-
-    def play_response(self):
-        if self.complete_response.strip():
-            print(f"Playing message: {self.complete_response}")  
-            self.eleven_labs_manager.play_text(self.complete_response)
-            self.complete_response = ""  
-
-def process_and_play_text():
-    global concatenated_text
-    sentences = re.split(r'[.?\n]+', concatenated_text)
-    sentences = [sentence.strip() for sentence in sentences if sentence]
-
-    for sentence in sentences:
-        print(f"Playing: {sentence}")
-        eleven_labs_manager.play_text(sentence)
-
-    concatenated_text = ""
-
 def interact_with_assistant(transcription):
-    global last_thread_id, last_interaction_time
     print("Interacting with assistant...")  
 
-    custom_event_handler = CustomAssistantEventHandler(eleven_labs_manager)
-    assistant_manager = AssistantManager(openai_client, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
-    assistant_manager.set_event_handler(custom_event_handler)
-    assistant_manager.handle_interaction(content=transcription)
-
-    last_thread_id = assistant_manager.thread_id
-    last_interaction_time = assistant_manager.last_interaction_time
-
-    assistant_manager.handle_streaming_interaction()
+    streaming_manager.handle_streaming_interaction(content=transcription)
 
 def on_thread_message_completed(data):
     global processed_messages, last_thread_id

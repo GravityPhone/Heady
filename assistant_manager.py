@@ -35,20 +35,12 @@ class EventHandler(AssistantEventHandler):
                     if output.type == "logs":
                         print(f"\n{output.logs}", flush=True)
 
-
-
-class AssistantManager:
-    def __init__(self, client, eleven_labs_manager, assistant_id=None):
+class ThreadManager:
+    def __init__(self, client):
         self.client = client
-        self.eleven_labs_manager = eleven_labs_manager
-        self.assistant_id = assistant_id
-        self.event_handler = None
         self.thread_id = None
         self.last_interaction_time = None
         self.interaction_in_progress = False
-
-    def set_event_handler(self, event_handler):
-        self.event_handler = event_handler
 
     def create_thread(self):
         if self.thread_id is not None:
@@ -88,49 +80,56 @@ class AssistantManager:
         self.interaction_in_progress = True
 
     def should_create_new_thread(self):
-        # Create a new thread if there's no existing thread or if the last interaction was too long ago
         if self.thread_id is None or time.time() - self.last_interaction_time > 90:
             return True
-        # Avoid creating a new thread if the previous interaction is still in progress
         if self.interaction_in_progress:
             return False
         return True
 
-    def handle_streaming_interaction(self):
-        if not self.thread_id or not self.assistant_id:
+class StreamingManager:
+    def __init__(self, thread_manager, eleven_labs_manager, assistant_id=None):
+        self.thread_manager = thread_manager
+        self.eleven_labs_manager = eleven_labs_manager
+        self.assistant_id = assistant_id
+        self.event_handler = None
+
+    def set_event_handler(self, event_handler):
+        self.event_handler = event_handler
+
+    def handle_streaming_interaction(self, content):
+        if not self.thread_manager.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
             return
 
         event_handler = self.event_handler if self.event_handler else EventHandler()
 
-        with self.client.beta.threads.runs.create_and_stream(
-            thread_id=self.thread_id,
+        self.thread_manager.add_message_to_thread(content)
+
+        with openai.beta.threads.runs.create_and_stream(
+            thread_id=self.thread_manager.thread_id,
             assistant_id=self.assistant_id,
         ) as stream:
             for event in stream:
-                print("Event received:", event)  # Debug print to confirm events are received
-                # Handle the message content for events with a 'data' attribute containing a message
+                print("Event received:", event)
                 if hasattr(event, 'data') and hasattr(event.data, 'content'):
                     for content_block in event.data.content:
                         if content_block.type == 'text':
                             message_text = content_block.text.value
-                            print(f"Playing message: {message_text}")  # Print statement before playing
-                            self.eleven_labs_manager.play_text(message_text)  # Play the text using ElevenLabsManager
-                            print("Message played using ElevenLabsManager.")  # Print statement after playing
-                            break  # Assuming you only want to print and play the first text block
-                # Existing event handling logic
+                            print(f"Playing message: {message_text}")
+                            self.eleven_labs_manager.play_text(message_text)
+                            print("Message played using ElevenLabsManager.")
+                            break
+
                 if isinstance(event, ThreadMessageDelta):
                     event_handler.on_text_delta(event.data.delta, None)
                 elif isinstance(event, ThreadRunRequiresAction):
                     event_handler.on_tool_call_created(event.tool_call)
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
+                    self.thread_manager.interaction_in_progress = False
                     break  # Exit the loop once the interaction is complete
                 elif isinstance(event, ThreadRunFailed):
                     print("\nInteraction failed.")
+                    self.thread_manager.interaction_in_progress = False
                     break  # Exit the loop if the interaction fails
                 # Add more event types as needed based on your application's requirements
-
-
-
-    # Additional methods as needed...
