@@ -9,6 +9,7 @@ from eleven_labs_manager import ElevenLabsManager
 from vision_module import VisionModule
 import openai
 from openai import AssistantEventHandler
+from state_manager import StateManager
 
 # Initialize OpenAI client
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -24,10 +25,6 @@ vision_module = VisionModule(openai_api_key=os.getenv("OPENAI_API_KEY"))
 is_recording = False
 picture_mode = False
 last_thread_id = None
-last_interaction_time = None
-
-# Global variable to hold the concatenated text
-concatenated_text = ""
 
 # Global set to track processed message IDs
 processed_messages = set()
@@ -40,7 +37,7 @@ thread_manager = ThreadManager(openai_client)
 streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
 
 def handle_detected_words(words):
-    global is_recording, picture_mode, last_thread_id, last_interaction_time
+    global is_recording, picture_mode, last_thread_id
     detected_phrase = ' '.join(words).lower().strip()
     print(f"Detected phrase: {detected_phrase}")
 
@@ -58,10 +55,11 @@ def handle_detected_words(words):
         process_recording()
 
 def process_recording():
-    global picture_mode, last_thread_id, last_interaction_time, transcription
+    global picture_mode, last_thread_id, transcription
     transcription = assemblyai_transcriber.transcribe_audio_file("recorded_audio.wav")
     print(f"Transcription result: '{transcription}'")
 
+    StateManager.last_interaction_time = time.time()
     thread_manager.handle_interaction(content=transcription)
 
     if picture_mode:
@@ -76,6 +74,7 @@ def interact_with_assistant(transcription):
     print("Interacting with assistant...")  
 
     streaming_manager.handle_streaming_interaction(content=transcription)
+    StateManager.last_interaction_time = time.time()
 
 def on_thread_message_completed(data):
     global processed_messages, last_thread_id
@@ -96,7 +95,7 @@ def on_thread_message_completed(data):
     setup_keyword_detection()
 
     last_thread_id = data.get('thread_id')
-    
+    StateManager.last_interaction_time = time.time()
     
 
 event_handlers = {
@@ -111,6 +110,7 @@ def dispatch_event(event_type, data):
         print(f"No handler for event type: {event_type}")
 
 def on_thread_run_step_completed(data):
+    global last_thread_id
     message_content = data.get('content', [])
     response_text = ""
     for content_block in message_content:
@@ -122,6 +122,7 @@ def on_thread_run_step_completed(data):
         print(f"Playing response: {response_text}")
     last_thread_id = data.get('thread_id')
     setup_keyword_detection()
+    StateManager.last_interaction_time = time.time()
 
 
 def initialize():
