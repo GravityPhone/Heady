@@ -1,5 +1,7 @@
 import openai
 import time
+import threading
+from state_manager import StateManager
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
 from openai.types.beta.threads import Run, RequiredActionFunctionToolCall
@@ -39,12 +41,12 @@ class ThreadManager:
     def __init__(self, client):
         self.client = client
         self.thread_id = None
-        self.last_interaction_time = None
         self.interaction_in_progress = False
+        self.reset_timer = None
 
     def create_thread(self):
-        if self.thread_id is not None:
-            print(f"Thread already exists: {self.thread_id}")
+        if self.thread_id is not None and not self.interaction_in_progress:
+            print(f"Using existing thread: {self.thread_id}")
             return self.thread_id
 
         try:
@@ -61,6 +63,10 @@ class ThreadManager:
             print("No thread ID set. Cannot add message.")
             return
 
+        if self.interaction_in_progress:
+            print("Previous interaction still in progress. Please wait.")
+            return
+
         try:
             message = self.client.beta.threads.messages.create(
                 thread_id=self.thread_id,
@@ -72,19 +78,36 @@ class ThreadManager:
             print(f"Failed to add message to thread: {e}")
 
     def handle_interaction(self, content):
-        if self.should_create_new_thread():
+        if not self.thread_id or not self.interaction_in_progress:
             self.create_thread()
-
         self.add_message_to_thread(content)
-        self.last_interaction_time = time.time()
+        StateManager.last_interaction_time = time.time()  # Update the time with each interaction
         self.interaction_in_progress = True
+        self.reset_last_interaction_time()
 
-    def should_create_new_thread(self):
-        if self.thread_id is None or time.time() - self.last_interaction_time > 90:
-            return True
-        if self.interaction_in_progress:
-            return False
-        return True
+    def reset_thread(self):
+        print("Resetting thread.")
+        self.thread_id = None
+        self.interaction_in_progress = False
+
+    def reset_last_interaction_time(self):
+        # This method resets the last interaction time and calls reset_thread after 90 seconds
+        def reset():
+            StateManager.last_interaction_time = None
+            self.reset_thread()  # Reset the thread once the timer completes
+            print("Last interaction time reset and thread reset")
+        
+        # Cancel existing timer if it exists and is still running
+        if self.reset_timer is not None and self.reset_timer.is_alive():
+            self.reset_timer.cancel()
+        
+        # Create and start a new timer
+        self.reset_timer = threading.Timer(90, reset)
+        self.reset_timer.start()
+
+    def end_of_interaction(self):
+        # Call this method at the end of an interaction to reset the timer
+        self.reset_last_interaction_time()
 
 class StreamingManager:
     def __init__(self, thread_manager, eleven_labs_manager, assistant_id=None):
@@ -127,9 +150,11 @@ class StreamingManager:
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
+                    self.thread_manager.end_of_interaction()
                     break  # Exit the loop once the interaction is complete
                 elif isinstance(event, ThreadRunFailed):
                     print("\nInteraction failed.")
                     self.thread_manager.interaction_in_progress = False
+                    self.thread_manager.end_of_interaction()
                     break  # Exit the loop if the interaction fails
                 # Add more event types as needed based on your application's requirements
