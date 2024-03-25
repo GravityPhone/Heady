@@ -3,8 +3,8 @@ import time
 import re
 from word_detector import setup_keyword_detection, set_message_handler
 from audio_recorder import start_recording, stop_recording
-from assemblyai_transcriber import AssemblyAITranscriber
-from assistant_manager import ThreadManager, StreamingManager
+from heddy.assemblyai_transcriber import AssemblyAITranscriber
+from heddy.assistant_manager import ThreadManager, StreamingManager
 from eleven_labs_manager import ElevenLabsManager
 from vision_module import VisionModule
 import openai

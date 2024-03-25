@@ -4,7 +4,7 @@ import threading
 import requests
 import json
 import logging
-from state_manager import StateManager
+from heddy.state_manager import StateManager
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
 from openai.types.beta.threads import Run, RequiredActionFunctionToolCall

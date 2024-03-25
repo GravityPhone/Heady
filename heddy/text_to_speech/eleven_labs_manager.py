@@ -1,6 +1,6 @@
 import requests
 import os
-from pydub import AudioSegment
+# from pydub import AudioSegment
 # Import the play function from elevenlabs/utils.py
 from elevenlabs import play
 import io

@@ -1,4 +1,5 @@
 import assemblyai as aai
+from heddy.speech_to_text.stt_manager import STTStatus, STTResult
 
 class AssemblyAITranscriber:
     def __init__(self, api_key):
@@ -12,10 +13,14 @@ class AssemblyAITranscriber:
         transcript = transcriber.transcribe(audio_file_path)
         
         # Check the transcription status and return the appropriate response
-        if transcript.status == aai.TranscriptStatus.error:
-            return transcript.error
-        else:
-            return transcript.text
+        
+        return STTResult(
+            transcript.text,
+            transcript.error,
+            STTStatus.ERROR
+            if transcript.status == aai.TranscriptStatus.error
+            else STTStatus.SUCCESS
+        )
 
 # The following testing code should be commented out or removed in the integration
 # if __name__ == "__main__":
