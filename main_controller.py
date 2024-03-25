@@ -11,7 +11,7 @@ import openai
 from openai import AssistantEventHandler
 from state_manager import StateManager
 
-# Initialize OpenAI client
+# Initialize OpenAI client ok computer send a little zapier tick please reply
 openai.api_key = os.getenv("OPENAI_API_KEY")
 openai_client = openai # This line initializes openai_client with the openai library itself
 

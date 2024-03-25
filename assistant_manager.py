@@ -1,6 +1,9 @@
 import openai
 import time
 import threading
+import requests
+import json
+import logging
 from state_manager import StateManager
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
@@ -24,8 +27,39 @@ class EventHandler(AssistantEventHandler):
                     if 'annotations' in content_change['text']:
                         print("Annotations:", content_change['text']['annotations'])
 
-    def on_tool_call_created(self, tool_call: RequiredActionFunctionToolCall):
-        print(f"\nassistant > {tool_call.type}\n", flush=True)
+    def on_tool_call_created(self, run):
+        print("\nassistant > Processing tool call\n", flush=True)
+        # Check if the run requires action and has the submit_tool_outputs type
+        if run.required_action.type == 'submit_tool_outputs':
+            # Iterate over each tool call in the tool_calls list
+            for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                # Check if the tool call is of type function and is the expected function
+                if tool_call.type == 'function' and tool_call.function.name == 'textzapier':
+                    # Parse the JSON string in arguments to a Python dictionary
+                    arguments = json.loads(tool_call.function.arguments)
+                    text_to_send = arguments['text']
+                    self.send_text_via_zapier(text_to_send, tool_call.id)
+
+    def send_text_via_zapier(self, text: str, tool_call_id: str):
+        webhook_url = "https://hooks.zapier.com/hooks/catch/82343/19816978ac224264aa3eec6c8c911e10/"
+        payload = {"text": text}
+        try:
+            response = requests.post(webhook_url, json=payload)
+            if response.status_code == 200:
+                logging.info("Text sent successfully via Zapier.")
+                self.submit_tool_output(tool_call_id, True)
+            else:
+                logging.error(f"Failed to send text via Zapier. Status code: {response.status_code}, Response: {response.text}")
+                self.submit_tool_output(tool_call_id, False)
+        except Exception as e:
+            logging.exception("Exception occurred while sending text via Zapier.")
+            self.submit_tool_output(tool_call_id, False)
+
+    def submit_tool_output(self, tool_call_id: str, success: bool):
+        output_status = "Success" if success else "Failure"
+        # Implement the logic to submit the tool output back to the thread run
+        # This might involve calling a method from the OpenAI API client
+        print(f"Tool output submitted: {output_status}")
 
     def on_tool_call_delta(self, delta: RequiredActionFunctionToolCall, snapshot: RequiredActionFunctionToolCall):
         if delta.type == 'code_interpreter':
@@ -134,19 +168,12 @@ class StreamingManager:
         ) as stream:
             for event in stream:
                 print("Event received:", event)
-                if hasattr(event, 'data') and hasattr(event.data, 'content'):
-                    for content_block in event.data.content:
-                        if content_block.type == 'text':
-                            message_text = content_block.text.value
-                            print(f"Playing message: {message_text}")
-                            self.eleven_labs_manager.play_text(message_text)
-                            print("Message played using ElevenLabsManager.")
-                            break
-
-                if isinstance(event, ThreadMessageDelta):
+                if isinstance(event, ThreadRunRequiresAction):
+                    # Hypothetical adjustment: Access tool_call correctly based on the actual event structure
+                    tool_call_data = event.data  # This line is speculative and should be adjusted
+                    event_handler.on_tool_call_created(tool_call_data)
+                elif isinstance(event, ThreadMessageDelta):
                     event_handler.on_text_delta(event.data.delta, None)
-                elif isinstance(event, ThreadRunRequiresAction):
-                    event_handler.on_tool_call_created(event.tool_call)
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
