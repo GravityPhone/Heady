@@ -1,9 +1,6 @@
 import requests
-import os
-# from pydub import AudioSegment
-# Import the play function from elevenlabs/utils.py
-from elevenlabs import play
-import io
+from heddy.text_to_speech.text_to_speach_manager import TTSStatus, TTSResult
+
 
 class ElevenLabsManager:
     def __init__(self, api_key):
@@ -12,7 +9,7 @@ class ElevenLabsManager:
         self.model_id = "eleven_turbo_v2"
         self.url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}/stream"
 
-    def play_text(self, text):
+    def __call__(self, text):
         query_params = {
             "optimize_streaming_latency": 0,
             "output_format": "mp3_44100_128"
@@ -36,8 +33,9 @@ class ElevenLabsManager:
 
         response = requests.post(self.url, params=query_params, json=payload, headers=headers)
 
-        if response.status_code == 200:
-            # Directly play the audio content without saving
-            play(response.content)
-        else:
-            print(f"Failed to convert text to speech. Status code: {response.status_code}, Response: {response.text}")
+        if response.status_code != 200:
+            return TTSResult(status=TTSStatus.ERROR, error=response.text)
+        return TTSResult(
+            status=TTSStatus.SUCCESS,
+            audio=response.content
+        )
