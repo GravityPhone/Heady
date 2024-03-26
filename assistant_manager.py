@@ -14,10 +14,8 @@ from openai.types.beta.assistant_stream_event import (
     ThreadRunStepCancelled)
 
 class EventHandler(AssistantEventHandler):
-    def __init__(self, client, thread_manager):
-        self.client = client
-        self.thread_manager = thread_manager
-        self.pending_tool_calls = {}
+    def __init__(self):
+        super().__init__()
 
     def on_tool_call_created(self, tool_call_data):
         print("\nassistant > Processing tool call\n", flush=True)
@@ -148,7 +146,7 @@ class StreamingManager:
     def ensure_event_handler_initialized(self):
         if not self.event_handler:
             print("Initializing event handler now.")
-            self.set_event_handler(AssistantEventHandler(self.thread_manager.client, self.thread_manager))
+            self.event_handler = EventHandler()
         else:
             print("Event handler is already initialized.")
 
@@ -159,7 +157,7 @@ class StreamingManager:
             print("Thread ID or Assistant ID is not set.")
             return
 
-        event_handler = self.event_handler if self.event_handler else EventHandler(self.thread_manager.client, self.thread_manager)
+        event_handler = self.event_handler if self.event_handler else EventHandler()
         self.thread_manager.add_message_to_thread(content)
 
         with openai.beta.threads.runs.create_and_stream(
@@ -171,7 +169,8 @@ class StreamingManager:
                 if isinstance(event, ThreadRunRequiresAction):
                     self.event_handler.on_tool_call_created(event.data.required_action)
                 elif isinstance(event, ThreadMessageDelta):
-                    self.event_handler.on_text_delta(event.data.delta, None)
+                    # No action needed for ThreadMessageDelta in this context
+                    pass
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
