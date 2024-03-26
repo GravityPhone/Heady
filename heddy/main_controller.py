@@ -1,153 +1,190 @@
 import os
-import time
-import re
-from word_detector import setup_keyword_detection, set_message_handler
-from audio_recorder import start_recording, stop_recording
-from heddy.assemblyai_transcriber import AssemblyAITranscriber
-from heddy.assistant_manager import ThreadManager, StreamingManager
-from eleven_labs_manager import ElevenLabsManager
-from vision_module import VisionModule
+from heddy.application_event import ApplicationEvent, ApplicationEventType, ProcessingStatus
+from heddy.io.sound_effects_player import AudioPlayer
+from heddy.speech_to_text.stt_manager import STTManager
+from heddy.text_to_speech.text_to_speach_manager import TTSManager
+from heddy.word_detector import WordDetector
+from heddy.io.audio_recorder import start_recording, stop_recording
+from heddy.speech_to_text.assemblyai_transcriber import AssemblyAITranscriber
+from heddy.ai_backend.assistant_manager import ThreadManager, StreamingManager
+from heddy.text_to_speech.eleven_labs import ElevenLabsManager
+from heddy.vision_module import VisionModule
 import openai
-from openai import AssistantEventHandler
-from state_manager import StateManager
+from dotenv import load_dotenv
 
-# Initialize OpenAI client ok computer send a little zapier tick please reply
-openai.api_key = os.getenv("OPENAI_API_KEY")
-openai_client = openai # This line initializes openai_client with the openai library itself
 
-# Initialize modules with provided API keys
-assemblyai_transcriber = AssemblyAITranscriber(api_key=os.getenv("ASSEMBLYAI_API_KEY"))
-# Adjusted to use the hardcoded Assistant ID
-eleven_labs_manager = ElevenLabsManager(api_key=os.getenv("ELEVENLABS_API_KEY"))
-vision_module = VisionModule(openai_api_key=os.getenv("OPENAI_API_KEY"))
-
-# State variables
-is_recording = False
-picture_mode = False
-last_thread_id = None
-
-# Global set to track processed message IDs
-processed_messages = set()
-
-# Global variable for transcription
-transcription = ""
-
-# Initialize ThreadManager and StreamingManager
-thread_manager = ThreadManager(openai_client)
-streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
-
-def handle_detected_words(words):
-    global is_recording, picture_mode, last_thread_id
-    detected_phrase = ' '.join(words).lower().strip()
-    print(f"Detected phrase: {detected_phrase}")
-
-    if "computer" in detected_phrase and not is_recording:
-        start_recording()
-        is_recording = True
-        print("Recording started...")
-    elif "snapshot" in detected_phrase and is_recording:
-        picture_mode = True
-        print("Picture mode activated...")
-    elif "reply" in detected_phrase and is_recording:
-        stop_recording()
-        is_recording = False
-        print("Recording stopped. Processing...")
-        process_recording()
-
-def process_recording():
-    global picture_mode, last_thread_id, transcription
-    transcription = assemblyai_transcriber.transcribe_audio_file("recorded_audio.wav")
-    print(f"Transcription result: '{transcription}'")
-
-    StateManager.last_interaction_time = time.time()
-    thread_manager.handle_interaction(content=transcription)
-
-    if picture_mode:
-        vision_module.capture_image_async()
-        description = vision_module.describe_captured_image(transcription=transcription)
-        interact_with_assistant(description)
-        picture_mode = False
-    else:
-        interact_with_assistant(transcription)
-
-def interact_with_assistant(transcription):
-    print("Interacting with assistant...")  
-
-    streaming_manager.handle_streaming_interaction(content=transcription)
-    StateManager.last_interaction_time = time.time()
-
-def on_thread_message_completed(data):
-    global processed_messages, last_thread_id
-    message_id = data.get('id')
-    if message_id in processed_messages:
-        print(f"Message {message_id} already processed.")
-        return
-    processed_messages.add(message_id)
-    print("Handling ThreadMessageCompleted event...")
-    message_content = data.get('content', [])
-    for content_block in message_content:
-        if content_block['type'] == 'text':
-            message_text = content_block['text']['value']
-            print(f"Received message: {message_text}")
-            print(f"Playing message: {message_text}")  
-            eleven_labs_manager.play_text(message_text)
-
-    setup_keyword_detection()
-
-    last_thread_id = data.get('thread_id')
-    StateManager.last_interaction_time = time.time()
+class MainController:
+    # State variables
+    is_recording = False
+    picture_mode = False
+    last_thread_id = None
     
+    # Global variable for transcription
+    transcription = ""
+    
+    # Global set to track processed message IDs
+    processed_messages = set()
 
-event_handlers = {
-    'thread.message.completed': on_thread_message_completed,
-}
+    def __init__(
+            self, 
+            assistant,
+            transcriber,
+            synthesizer,
+            audio_player,
+            vision_module,
+            word_detector
+        ) -> None:
+        self.assistant = assistant
+        self.transcriber = transcriber
+        self.synthesizer = synthesizer
+        self.vision_module = vision_module
+        self.audio_player = audio_player
+        self.word_detector = word_detector
 
-def dispatch_event(event_type, data):
-    handler = event_handlers.get(event_type)
-    if handler:
-        handler(data)
-    else:
-        print(f"No handler for event type: {event_type}")
+    def process_event(self, event: ApplicationEvent):
+        if event.type == ApplicationEventType.START:
+            return ApplicationEvent(
+                ApplicationEventType.SYNTHESIZE,
+                request='Hello! How can I assist you today?'
+            )
+        if event.type == ApplicationEventType.SYNTHESIZE:
+            return self.synthesizer.synthesize(event)
+        if event.type == ApplicationEventType.PLAY:
+            return self.audio_player.play(event)
+        if event.type == ApplicationEventType.LISTEN:
+            return self.word_detector.listen(event)
+        if event.type == ApplicationEventType.START_RECORDING:
+            self.start_recording()
+            return ApplicationEvent(ApplicationEventType.LISTEN)
+        if event.type == ApplicationEventType.USE_SNAPSHOT:
+            self.set_picture_mode()
+            return ApplicationEvent(ApplicationEventType.LISTEN)
+        if event.type == ApplicationEventType.STOP_RECORDING:
+            self.stop_recording()
+            self.word_detector.clear()
+            return ApplicationEvent(
+                ApplicationEventType.TRANSCRIBE,
+                request="recorded_audio.wav"
+            )
+        if event.type == ApplicationEventType.TRANSCRIBE:
+            return self.transcriber.transcribe_audio_file(event)
+        if event.type == ApplicationEventType.GET_SNAPSHOT:
+            return self.get_snapshot(event)
+        if event.type == ApplicationEventType.AI_INTERACT:
+            return self.assistant.handle_streaming_interaction(event)
 
-def on_thread_run_step_completed(data):
-    global last_thread_id
-    message_content = data.get('content', [])
-    response_text = ""
-    for content_block in message_content:
-        if content_block['type'] == 'text':
-            response_text += content_block['text']['value']
-    if response_text.strip():
-        print(f"Playing response: {response_text}")  
-        eleven_labs_manager.play_text(response_text)
-        print(f"Playing response: {response_text}")
-    last_thread_id = data.get('thread_id')
-    setup_keyword_detection()
-    StateManager.last_interaction_time = time.time()
+    def process_result(self, event: ApplicationEvent):
+        if event.status == ProcessingStatus.ERROR:
+            raise RuntimeError(event.error)
+        if event.status == ProcessingStatus.INIT:
+            return event
+        if event.type == ApplicationEventType.SYNTHESIZE:
+            return ApplicationEvent(
+                type=ApplicationEventType.PLAY,
+                request=event.result
+            )
+        if event.type == ApplicationEventType.PLAY:
+            return ApplicationEvent(
+                type=ApplicationEventType.LISTEN,
+            )
+        if event.type == ApplicationEventType.LISTEN:
+            return self.handle_detected_word(event.result)
+        if event.type == ApplicationEventType.TRANSCRIBE:
+            print(f"Transcription result: '{event.result}'")
+            if self.picture_mode:
+                return ApplicationEvent(
+                    type=ApplicationEventType.GET_SNAPSHOT,
+                    request=event.result
+                )
+            else:
+                return ApplicationEvent(
+                type=ApplicationEventType.AI_INTERACT,
+                request=event.result
+            )
+        if event.type == ApplicationEventType.GET_SNAPSHOT:
+            print(f"Snapshot Result: '{event.result}'")
+            return ApplicationEvent(
+                type=ApplicationEventType.AI_INTERACT,
+                request=event.result
+            )
+        if event.type == ApplicationEventType.AI_INTERACT:
+            print(f"Assistant Response: '{event.result}'")
+            return ApplicationEvent(
+                type=ApplicationEventType.SYNTHESIZE,
+                request=event.result
+            )
+    
+    def get_snapshot(self, event: ApplicationEvent):
+        # TODO: move to vision module logic
+        self.picture_mode = False
+        self.vision_module.capture_image_async()
+        event.status = ProcessingStatus.SUCCESS
+        event.result = self.vision_module.describe_captured_image(event.request)
+        return event
 
+    # TODO: move to an interaction manager(?) module
+    def stop_recording(self, ):
+        stop_recording()
+        self.is_recording = False
+        print("Recording stopped. Processing...")
+    
+    # TODO: move to an interaction manager(?) module
+    def start_recording(self,):
+        start_recording()
+        self.is_recording = True
+        print("Recording started...")
+    
+    # TODO: move to an interaction manager(?) module
+    def set_picture_mode(self,):
+        if self.is_recording:
+            self.picture_mode = True
+            print("Picture mode activated")
+
+    # TODO: move to an interaction(?) module
+    def handle_detected_word(self, word):
+        if "computer" in word:
+            return ApplicationEvent(ApplicationEventType.START_RECORDING)
+        if "snapshot" in word:
+            return ApplicationEvent(ApplicationEventType.USE_SNAPSHOT)
+        if "reply" in word:
+            return ApplicationEvent(ApplicationEventType.STOP_RECORDING)
+    
+    def run(self, event: ApplicationEvent):
+        current_event = event
+        while current_event.type != ApplicationEventType.EXIT:
+            print(current_event.type)
+            result = self.process_event(current_event)
+            current_event = self.process_result(result)
 
 def initialize():
+    load_dotenv()
     print("System initializing...")
-    set_message_handler(handle_detected_words)
-    setup_keyword_detection()
+    # Initialize OpenAI client ok computer send a little zapier tick please reply
+    openai_client = openai.OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY")
+    ) # This line initializes openai_client with the openai library itself
+
+    # Initialize modules with provided API keys
+    assemblyai_transcriber = AssemblyAITranscriber(api_key=os.getenv("ASSEMBLYAI_API_KEY"))
+
+    # Adjusted to use the hardcoded Assistant ID
+    eleven_labs_manager = ElevenLabsManager(api_key=os.getenv("ELEVENLABS_API_KEY"))
+    vision_module = VisionModule(openai_api_key=os.getenv("OPENAI_API_KEY"))
+
+    # Initialize ThreadManager and StreamingManager
+    thread_manager = ThreadManager(openai_client)
+    streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+
+    word_detector = WordDetector()
+    return MainController(
+        assistant=streaming_manager,
+        transcriber=STTManager(transcriber=assemblyai_transcriber),
+        vision_module=vision_module,
+        audio_player=AudioPlayer(),
+        word_detector=word_detector,
+        synthesizer=TTSManager(eleven_labs_manager)
+    )
 
 if __name__ == "__main__":
-    initialize()
-    while True:
-        time.sleep(1)
-        
-        event_received = {
-            'event': 'thread.message.completed',
-            'data': {
-                'id': 'msg_jsoCM86BSagjg4OzAjPKcwhx',
-                'content': [
-                    {
-                        'text': {
-                            'value': 'Hello! How can I assist you today?'
-                        },
-                        'type': 'text'
-                    }
-                ],
-                # Other fields omitted for brevity
-            }
-        }
-        dispatch_event(event_received['event'], event_received['data'])
+    main = initialize()
+    main.run(ApplicationEvent(ApplicationEventType.START))

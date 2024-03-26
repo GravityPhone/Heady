@@ -1,17 +1,32 @@
+from enum import Enum
+from typing import Optional
 import openai
 import time
 import threading
 import requests
 import json
 import logging
+from heddy.application_event import ApplicationEvent, ProcessingStatus
 from heddy.state_manager import StateManager
 from openai.lib.streaming import AssistantEventHandler
 from openai.types.beta import Assistant, Thread
-from openai.types.beta.threads import Run, RequiredActionFunctionToolCall
+from openai.types.beta.threads import Run, RequiredActionFunctionToolCall, TextDelta
 from openai.types.beta.assistant_stream_event import (
     ThreadRunRequiresAction, ThreadMessageDelta, ThreadRunCompleted,
     ThreadRunFailed, ThreadRunCancelling, ThreadRunCancelled, ThreadRunExpired, ThreadRunStepFailed,
     ThreadRunStepCancelled)
+from dataclasses import dataclass
+
+class AssistantResultStatus(Enum):
+    SUCCESS = 1
+    ERROR = -1
+
+@dataclass
+class AssitsantResult:
+    text: Optional[str]
+    error: Optional[str]
+    status: AssistantResultStatus
+
 
 class EventHandler(AssistantEventHandler):
     
@@ -152,36 +167,47 @@ class StreamingManager:
 
     def set_event_handler(self, event_handler):
         self.event_handler = event_handler
-
-    def handle_streaming_interaction(self, content):
-        if not self.thread_manager.thread_id or not self.assistant_id:
-            print("Thread ID or Assistant ID is not set.")
-            return
-
-        event_handler = self.event_handler if self.event_handler else EventHandler()
-
-        self.thread_manager.add_message_to_thread(content)
-
+    
+    def handle_stream(self,):
+        text = ""
         with openai.beta.threads.runs.create_and_stream(
             thread_id=self.thread_manager.thread_id,
             assistant_id=self.assistant_id,
         ) as stream:
             for event in stream:
                 print("Event received:", event)
-                if isinstance(event, ThreadRunRequiresAction):
-                    # Hypothetical adjustment: Access tool_call correctly based on the actual event structure
-                    tool_call_data = event.data  # This line is speculative and should be adjusted
-                    event_handler.on_tool_call_created(tool_call_data)
-                elif isinstance(event, ThreadMessageDelta):
-                    event_handler.on_text_delta(event.data.delta, None)
+                if isinstance(event, ThreadMessageDelta) and event.data.delta.content:
+                    delta = event.data.delta.content[0].text.value
+                    text +=  delta if delta is not None else ""
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
                     self.thread_manager.end_of_interaction()
-                    break  # Exit the loop once the interaction is complete
+                    return True, text
+                     # Exit the loop once the interaction is complete
                 elif isinstance(event, ThreadRunFailed):
                     print("\nInteraction failed.")
                     self.thread_manager.interaction_in_progress = False
                     self.thread_manager.end_of_interaction()
-                    break  # Exit the loop if the interaction fails
+                    return False, "Generic OpenAI Error"
+                    # Exit the loop if the interaction fails
                 # Add more event types as needed based on your application's requirements
+
+    def handle_streaming_interaction(self, event: ApplicationEvent):
+        if not self.assistant_id:
+            print("Assistant ID is not set.")
+            return
+        if not self.thread_manager.thread_id:
+            self.thread_manager.create_thread()
+        
+        content = event.request
+        self.thread_manager.add_message_to_thread(content)
+        success, text = self.handle_stream()
+
+        if not success:
+            event.status = ProcessingStatus.ERROR
+            event.error = text
+        else:
+            event.status = ProcessingStatus.SUCCESS
+            event.result = text
+        return event

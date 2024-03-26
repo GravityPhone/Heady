@@ -1,7 +1,10 @@
 import pyaudio
 import wave
+from elevenlabs import play
 
-class SoundEffectsPlayer:
+from heddy.application_event import ApplicationEvent, ApplicationEventType, ProcessingStatus
+
+class AudioPlayer:
     def __init__(self):
         """Initializes the sound effects player."""
         self.pyaudio_instance = pyaudio.PyAudio()
@@ -31,6 +34,14 @@ class SoundEffectsPlayer:
         # Cleanup
         stream.stop_stream()
         stream.close()
+    
+    def play(self, event: ApplicationEvent):
+        play(event.request)
+        return ApplicationEvent(
+            type=ApplicationEventType.PLAY,
+            status=ProcessingStatus.SUCCESS
+        )
+
 
     def __del__(self):
         """Ensure PyAudio instance is terminated upon deletion."""
