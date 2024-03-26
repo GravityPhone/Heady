@@ -140,17 +140,20 @@ class StreamingManager:
         self.event_handler = None
 
     def set_event_handler(self, event_handler):
-        self.event_handler = event_handler
+        if not self.event_handler:
+            self.event_handler = event_handler
+        else:
+            print("Event handler is already set.")
+
+    def ensure_event_handler_initialized(self):
+        if not self.event_handler:
+            print("Initializing event handler now.")
+            self.set_event_handler(AssistantEventHandler(self.thread_manager.client, self.thread_manager))
+        else:
+            print("Event handler is already initialized.")
 
     def handle_streaming_interaction(self, content):
-        if self.event_handler is None:
-            print("Error: event_handler is not set. Attempting to set it now.")
-            # Attempt to set the event_handler here if it's critical to proceed
-            # This is a workaround and might not be suitable for all use cases
-            self.set_event_handler(AssistantEventHandler(self.thread_manager.client, self.thread_manager))
-            if self.event_handler is None:
-                print("Critical Error: Failed to set event_handler. Cannot proceed.")
-                return
+        self.ensure_event_handler_initialized()
 
         if not self.thread_manager.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
