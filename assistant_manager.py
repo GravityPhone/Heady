@@ -16,6 +16,7 @@ from openai.types.beta.assistant_stream_event import (
 class EventHandler(AssistantEventHandler):
     def __init__(self):
         super().__init__()
+        self.pending_tool_calls = {}
 
     def on_tool_call_created(self, tool_call_data):
         print("\nassistant > Processing tool call\n", flush=True)
