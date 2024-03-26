@@ -14,62 +14,51 @@ from openai.types.beta.assistant_stream_event import (
     ThreadRunStepCancelled)
 
 class EventHandler(AssistantEventHandler):
-    
-    def on_text_created(self, text: str) -> None:
-        print(f"\nassistant > ", end="", flush=True)
+    def __init__(self, client, thread_manager):
+        self.client = client
+        self.thread_manager = thread_manager
+        self.pending_tool_calls = {}
 
-    def on_text_delta(self, delta, snapshot):
-        # Access the delta attribute correctly
-        if 'content' in delta:
-            for content_change in delta['content']:
-                if content_change['type'] == 'text':
-                    print(content_change['text']['value'], end="", flush=True)
-                    if 'annotations' in content_change['text']:
-                        print("Annotations:", content_change['text']['annotations'])
-
-    def on_tool_call_created(self, run):
+    def on_tool_call_created(self, tool_call_data):
         print("\nassistant > Processing tool call\n", flush=True)
-        # Check if the run requires action and has the submit_tool_outputs type
-        if run.required_action.type == 'submit_tool_outputs':
-            # Iterate over each tool call in the tool_calls list
-            for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                # Check if the tool call is of type function and is the expected function
-                if tool_call.type == 'function' and tool_call.function.name == 'textzapier':
-                    # Parse the JSON string in arguments to a Python dictionary
-                    arguments = json.loads(tool_call.function.arguments)
-                    text_to_send = arguments['text']
-                    self.send_text_via_zapier(text_to_send, tool_call.id)
+        tool_call = tool_call_data.submit_tool_outputs.tool_calls[0]
+        arguments = json.loads(tool_call.function.arguments)
+        message = arguments['message']
+        self.pending_tool_calls[tool_call.id] = message
 
-    def send_text_via_zapier(self, text: str, tool_call_id: str):
-        webhook_url = "https://hooks.zapier.com/hooks/catch/82343/19816978ac224264aa3eec6c8c911e10/"
-        payload = {"text": text}
+    def on_run_completed(self, run_id, thread_id, assistant_id):
+        for tool_call_id, message in self.pending_tool_calls.items():
+            self.handle_tool_call_completion(message, tool_call_id, run_id, thread_id, assistant_id)
+        self.pending_tool_calls.clear()
+
+    def handle_tool_call_completion(self, message, tool_call_id, run_id, thread_id, assistant_id):
         try:
-            response = requests.post(webhook_url, json=payload)
-            if response.status_code == 200:
-                logging.info("Text sent successfully via Zapier.")
-                self.submit_tool_output(tool_call_id, True)
-            else:
-                logging.error(f"Failed to send text via Zapier. Status code: {response.status_code}, Response: {response.text}")
-                self.submit_tool_output(tool_call_id, False)
+            self.send_text_via_zapier(message, tool_call_id, run_id)
         except Exception as e:
-            logging.exception("Exception occurred while sending text via Zapier.")
-            self.submit_tool_output(tool_call_id, False)
+            logging.error(f"Exception occurred while sending text via Zapier.", exc_info=True)
+            self.submit_tool_output(tool_call_id, run_id, "Failed to send text message.")
 
-    def submit_tool_output(self, tool_call_id: str, success: bool):
-        output_status = "Success" if success else "Failure"
-        # Implement the logic to submit the tool output back to the thread run
-        # This might involve calling a method from the OpenAI API client
-        print(f"Tool output submitted: {output_status}")
+    def send_text_via_zapier(self, message, tool_call_id, run_id):
+        webhook_url = "https://hooks.zapier.com/hooks/catch/82343/19816978ac224264aa3eec6c8c911e10/"
+        payload = {"text": message}
+        response = requests.post(webhook_url, json=payload)
+        if response.status_code == 200:
+            logging.info("Text sent successfully via Zapier.")
+            self.submit_tool_output(tool_call_id, run_id, "Text message sent successfully.")
+        else:
+            logging.error(f"Failed to send text via Zapier. Status code: {response.status_code}, Response: {response.text}")
+            self.submit_tool_output(tool_call_id, run_id, "Failed to send text message.")
 
-    def on_tool_call_delta(self, delta: RequiredActionFunctionToolCall, snapshot: RequiredActionFunctionToolCall):
-        if delta.type == 'code_interpreter':
-            if delta.code_interpreter.input:
-                print(delta.code_interpreter.input, end="", flush=True)
-            if delta.code_interpreter.outputs:
-                print(f"\n\noutput >", flush=True)
-                for output in delta.code_interpreter.outputs:
-                    if output.type == "logs":
-                        print(f"\n{output.logs}", flush=True)
+    def submit_tool_output(self, tool_call_id, run_id, output):
+        self.client.beta.threads.runs.submit_tool_outputs(
+            run_id=run_id,
+            tool_outputs=[
+                {
+                    "tool_call_id": tool_call_id,
+                    "output": output
+                }
+            ]
+        )
 
 class ThreadManager:
     def __init__(self, client):
@@ -154,12 +143,15 @@ class StreamingManager:
         self.event_handler = event_handler
 
     def handle_streaming_interaction(self, content):
+        if self.event_handler is None:
+            print("Error: event_handler is not set.")
+            return
+
         if not self.thread_manager.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
             return
 
-        event_handler = self.event_handler if self.event_handler else EventHandler()
-
+        event_handler = self.event_handler if self.event_handler else EventHandler(self.thread_manager.client, self.thread_manager)
         self.thread_manager.add_message_to_thread(content)
 
         with openai.beta.threads.runs.create_and_stream(
@@ -169,16 +161,15 @@ class StreamingManager:
             for event in stream:
                 print("Event received:", event)
                 if isinstance(event, ThreadRunRequiresAction):
-                    # Hypothetical adjustment: Access tool_call correctly based on the actual event structure
-                    tool_call_data = event.data  # This line is speculative and should be adjusted
-                    event_handler.on_tool_call_created(tool_call_data)
+                    self.event_handler.on_tool_call_created(event.data.required_action)
                 elif isinstance(event, ThreadMessageDelta):
-                    event_handler.on_text_delta(event.data.delta, None)
+                    self.event_handler.on_text_delta(event.data.delta, None)
                 elif isinstance(event, ThreadRunCompleted):
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
                     self.thread_manager.end_of_interaction()
-                    break  # Exit the loop once the interaction is complete
+                    self.event_handler.on_run_completed(event.data.id, self.thread_manager.thread_id, self.assistant_id)
+                    break
                 elif isinstance(event, ThreadRunFailed):
                     print("\nInteraction failed.")
                     self.thread_manager.interaction_in_progress = False

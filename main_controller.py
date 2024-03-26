@@ -22,7 +22,7 @@ eleven_labs_manager = ElevenLabsManager(api_key=os.getenv("ELEVENLABS_API_KEY"))
 vision_module = VisionModule(openai_api_key=os.getenv("OPENAI_API_KEY"))
 
 # State variables
-is_recording = False
+is_recording = False  
 picture_mode = False
 last_thread_id = None
 
@@ -63,7 +63,7 @@ def process_recording():
     thread_manager.handle_interaction(content=transcription)
 
     if picture_mode:
-        vision_module.capture_image_async()
+        vision_module.capture_image_async() 
         description = vision_module.describe_captured_image(transcription=transcription)
         interact_with_assistant(description)
         picture_mode = False
@@ -129,6 +129,10 @@ def initialize():
     print("System initializing...")
     set_message_handler(handle_detected_words)
     setup_keyword_detection()
+    
+    # Initialize EventHandler and set it on StreamingManager
+    event_handler = AssistantEventHandler(openai_client, thread_manager)  # Adjust this line based on your actual EventHandler initialization
+    streaming_manager.set_event_handler(event_handler)
 
 if __name__ == "__main__":
     initialize()
