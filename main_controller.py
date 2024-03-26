@@ -130,8 +130,10 @@ def initialize():
     set_message_handler(handle_detected_words)
     setup_keyword_detection()
     
-    # Initialize EventHandler and set it on StreamingManager
-    event_handler = AssistantEventHandler(openai_client, thread_manager)  # Adjust this line based on your actual EventHandler initialization
+    # Create an EventHandler instance
+    event_handler = AssistantEventHandler(openai_client, thread_manager)
+    
+    # Set the EventHandler on the StreamingManager
     streaming_manager.set_event_handler(event_handler)
 
 if __name__ == "__main__":
