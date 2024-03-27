@@ -1,0 +1,308 @@
+Function calling
+
+Similar to the Chat Completions API, the Assistants API supports function calling. Function calling allows you to describe functions to the Assistants and have it intelligently return the functions that need to be called along with their arguments. The Assistants API will pause execution during a Run when it invokes functions, and you can supply the results of the function call back to continue the Run execution.
+Defining functions
+
+First, define your functions when creating an Assistant:
+python
+
+assistant = client.beta.assistants.create(
+  instructions="You are a weather bot. Use the provided functions to answer questions.",
+  model="gpt-4-turbo-preview",
+  tools=[{
+      "type": "function",
+    "function": {
+      "name": "getCurrentWeather",
+      "description": "Get the weather in location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string", "description": "The city and state e.g. San Francisco, CA"},
+          "unit": {"type": "string", "enum": ["c", "f"]}
+        },
+        "required": ["location"]
+      }
+    }
+  }, {
+    "type": "function",
+    "function": {
+      "name": "getNickname",
+      "description": "Get the nickname of a city",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string", "description": "The city and state e.g. San Francisco, CA"},
+        },
+        "required": ["location"]
+      }
+    } 
+  }]
+)
+
+Reading the functions called by the Assistant
+
+When you initiate a Run with a user Message that triggers the function, the Run will enter a pending status. After it processes, the run will enter a requires_action state which you can verify by retrieving the Run. The model can provide multiple functions to call at once using parallel function calling:
+
+{
+  "id": "run_abc123",
+  "object": "thread.run",
+  "assistant_id": "asst_abc123",
+  "thread_id": "thread_abc123",
+  "status": "requires_action",
+  "required_action": {
+    "type": "submit_tool_outputs",
+    "submit_tool_outputs": {
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "getCurrentWeather",
+            "arguments": "{\"location\":\"San Francisco\"}"
+          }
+        },
+        {
+          "id": "call_abc456",
+          "type": "function",
+          "function": {
+            "name": "getNickname",
+            "arguments": "{\"location\":\"Los Angeles\"}"
+          }
+        }
+      ]
+    }
+  },
+...
+
+Submitting functions outputs
+
+You can then complete the Run by submitting the tool output from the function(s) you call. Pass the tool_call_id referenced in the required_action object above to match output to each function call.
+python
+
+run = client.beta.threads.runs.submit_tool_outputs(
+  thread_id=thread.id,
+  run_id=run.id,
+  tool_outputs=[
+      {
+        "tool_call_id": call_ids[0],
+        "output": "22C",
+      },
+      {
+        "tool_call_id": call_ids[1],
+        "output": "LA",
+      },
+    ]
+)
+
+After submitting outputs, the run will enter the queued state before it continues its execution. 
+
+When you have all the context you need from your user in the Thread, you can run the Thread with an Assistant of your choice.
+python
+
+queued	When Runs are first created or when you complete the required_action, they are moved to a queued status. They should almost immediately move to in_progress.
+in_progress	While in_progress, the Assistant uses the model and tools to perform steps. You can view progress being made by the Run by examining the Run Steps.
+completed	The Run successfully completed! You can now view all Messages the Assistant added to the Thread, and all the steps the Run took. You can also continue the conversation by adding more user Messages to the Thread and creating another Run.
+requires_action	When using the Function calling tool, the Run will move to a required_action state once the model determines the names and arguments of the functions to be called. You must then run those functions and submit the outputs before the run proceeds. If the outputs are not provided before the expires_at timestamp passes (roughly 10 mins past creation), the run will move to an expired status.
+expired	This happens when the function calling outputs were not submitted before expires_at and the run expires. Additionally, if the runs take too long to execute and go beyond the time stated in expires_at, our systems will expire the run.
+cancelling	You can attempt to cancel an in_progress run using the Cancel Run endpoint. Once the attempt to cancel succeeds, status of the Run moves to cancelled. Cancellation is attempted but not guaranteed.
+cancelled	Run was successfully cancelled.
+failed	You can view the reason for the failure by looking at the last_error object in the Run. The timestamp for the failure will be recorded under failed_at.
+
+run = client.beta.threads.runs.create(
+  thread_id=thread.id,
+  assistant_id=assistant.id
+)
+
+Polling for updates
+
+In order to keep the status of your run up to date, you will have to periodically retrieve the Run object. You can check the status of the run each time you retrieve the object to determine what your application should do next. We plan to add support for streaming to make this simpler in the near future.
+Thread locks
+
+When a Run is in_progress and not in a terminal state, the Thread is locked. This means that:
+
+    New Messages cannot be added to the Thread.
+    New Runs cannot be created on the Thread.
+
+Run steps
+
+Run steps lifecycle - diagram showing possible status transitions
+
+Run step statuses have the same meaning as Run statuses.
+
+Most of the interesting detail in the Run Step object lives in the step_details field. There can be two types of step details:
+
+    message_creation: This Run Step is created when the Assistant creates a Message on the Thread.
+    tool_calls: This Run Step is created when the Assistant calls a tool. Details around this are covered in the relevant sections of the Tools guide.
+
+    from typing_extensions import override
+from openai import AssistantEventHandler
+ 
+# First, we create a EventHandler class to define
+# how we want to handle the events in the response stream.
+ 
+class EventHandler(AssistantEventHandler):    
+  @override
+  def on_text_created(self, text) -> None:
+    print(f"\nassistant > ", end="", flush=True)
+      
+  @override
+  def on_text_delta(self, delta, snapshot):
+    print(delta.value, end="", flush=True)
+      
+  def on_tool_call_created(self, tool_call):
+    print(f"\nassistant > {tool_call.type}\n", flush=True)
+  
+  def on_tool_call_delta(self, delta, snapshot):
+    if delta.type == 'code_interpreter':
+      if delta.code_interpreter.input:
+        print(delta.code_interpreter.input, end="", flush=True)
+      if delta.code_interpreter.outputs:
+        print(f"\n\noutput >", flush=True)
+        for output in delta.code_interpreter.outputs:
+          if output.type == "logs":
+            print(f"\n{output.logs}", flush=True)
+ 
+# Then, we use the `create_and_stream` SDK helper 
+# with the `EventHandler` class to create the Run 
+# and stream the response.
+ 
+with client.beta.threads.runs.create_and_stream(
+  thread_id=thread.id,
+  assistant_id=assistant.id,
+  instructions="Please address the user as Jane Doe. The user has a premium account.",
+  event_handler=EventHandler(),
+) as stream:
+  stream.until_done()
+
+  Assistant stream eventsBeta
+
+  Represents an event emitted when streaming a Run.
+  
+  Each event in a server-sent events stream has an event and data property:
+  
+  event: thread.created
+  data: {"id": "thread_123", "object": "thread", ...}
+  
+  We emit events whenever a new object is created, transitions to a new state, or is being streamed in parts (deltas). For example, we emit thread.run.created when a new run is created, thread.run.completed when a run completes, and so on. When an Assistant chooses to create a message during a run, we emit a thread.message.created event, a thread.message.in_progress event, many thread.message.delta events, and finally a thread.message.completed event.
+  
+  We may add additional events over time, so we recommend handling unknown events gracefully in your code. See the Assistants API quickstart to learn how to integrate the Assistants API with streaming.
+  thread.created
+  
+  data is a thread
+  
+  Occurs when a new thread is created.
+  thread.run.created
+  
+  data is a run
+  
+  Occurs when a new run is created.
+  thread.run.queued
+  
+  data is a run
+  
+  Occurs when a run moves to a queued status.
+  thread.run.in_progress
+  
+  data is a run
+  
+  Occurs when a run moves to an in_progress status.
+  thread.run.requires_action
+  
+  data is a run
+  
+  Occurs when a run moves to a requires_action status.
+  thread.run.completed
+  
+  data is a run
+  
+  Occurs when a run is completed.
+  thread.run.failed
+  
+  data is a run
+  
+  Occurs when a run fails.
+  thread.run.cancelling
+  
+  data is a run
+  
+  Occurs when a run moves to a cancelling status.
+  thread.run.cancelled
+  
+  data is a run
+  
+  Occurs when a run is cancelled.
+  thread.run.expired
+  
+  data is a run
+  
+  Occurs when a run expires.
+  thread.run.step.created
+  
+  data is a run step
+  
+  Occurs when a run step is created.
+  thread.run.step.in_progress
+  
+  data is a run step
+  
+  Occurs when a run step moves to an in_progress state.
+  thread.run.step.delta
+  
+  data is a run step delta
+  
+  Occurs when parts of a run step are being streamed.
+  thread.run.step.completed
+  
+  data is a run step
+  
+  Occurs when a run step is completed.
+  thread.run.step.failed
+  
+  data is a run step
+  
+  Occurs when a run step fails.
+  thread.run.step.cancelled
+  
+  data is a run step
+  
+  Occurs when a run step is cancelled.
+  thread.run.step.expired
+  
+  data is a run step
+  
+  Occurs when a run step expires.
+  thread.message.created
+  
+  data is a message
+  
+  Occurs when a message is created.
+  thread.message.in_progress
+  
+  data is a message
+  
+  Occurs when a message moves to an in_progress state.
+  thread.message.delta
+  
+  data is a message delta
+  
+  Occurs when parts of a Message are being streamed.
+  thread.message.completed
+  
+  data is a message
+  
+  Occurs when a message is completed.
+  thread.message.incomplete
+  
+  data is a message
+  
+  Occurs when a message ends before it is completed.
+  error
+  
+  data is an error
+  
+  Occurs when an error occurs. This can happen due to an internal server error or a timeout.
+  done
+  
+  data is [DONE]
+  
+  Occurs when a stream ends.
