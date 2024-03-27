@@ -34,11 +34,11 @@ class EventHandler(AssistantEventHandler):
             # Iterate over each tool call in the tool_calls list
             for tool_call in run.required_action.submit_tool_outputs.tool_calls:
                 # Check if the tool call is of type function and is the expected function
-                if tool_call.type == 'function' and tool_call.function.name == 'textzapier':
+                if tool_call.type == 'function' and tool_call.function.name == 'send_text_message':
                     # Parse the JSON string in arguments to a Python dictionary
                     arguments = json.loads(tool_call.function.arguments)
-                    text_to_send = arguments['text']
-                    self.send_text_via_zapier(text_to_send, tool_call.id)
+                    message = arguments['message']
+                    self.send_text_via_zapier(message, tool_call.id)
 
     def send_text_via_zapier(self, text: str, tool_call_id: str):
         webhook_url = "https://hooks.zapier.com/hooks/catch/82343/19816978ac224264aa3eec6c8c911e10/"
