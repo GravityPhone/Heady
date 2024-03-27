@@ -15,6 +15,10 @@ from openai.types.beta.assistant_stream_event import (
 
 class EventHandler(AssistantEventHandler):
     
+    def __init__(self, on_tool_output_submitted=None):
+        # This callback is called when a tool output is submitted
+        self.on_tool_output_submitted = on_tool_output_submitted
+
     def on_text_created(self, text: str) -> None:
         print(f"\nassistant > ", end="", flush=True)
 
@@ -58,8 +62,10 @@ class EventHandler(AssistantEventHandler):
     def submit_tool_output(self, tool_call_id: str, success: bool):
         output_status = "Success" if success else "Failure"
         # Implement the logic to submit the tool output back to the thread run
-        # This might involve calling a method from the OpenAI API client
         print(f"Tool output submitted: {output_status}")
+        # After submitting the tool output, notify the StreamingManager
+        if self.on_tool_output_submitted:
+            self.on_tool_output_submitted(success)
 
     def on_tool_call_delta(self, delta: RequiredActionFunctionToolCall, snapshot: RequiredActionFunctionToolCall):
         if delta.type == 'code_interpreter':
@@ -144,9 +150,10 @@ class ThreadManager:
         self.reset_last_interaction_time()
 
 class StreamingManager:
-    def __init__(self, thread_manager, eleven_labs_manager, assistant_id=None):
+    def __init__(self, thread_manager, eleven_labs_manager, client, assistant_id=None):
         self.thread_manager = thread_manager
         self.eleven_labs_manager = eleven_labs_manager
+        self.client = client
         self.assistant_id = assistant_id
         self.event_handler = None
 
@@ -154,6 +161,9 @@ class StreamingManager:
         self.event_handler = event_handler
 
     def handle_streaming_interaction(self, content):
+        # Set up the event handler with a callback to handle tool output submission
+        self.event_handler = EventHandler(on_tool_output_submitted=self.on_tool_output_submitted)
+
         if not self.thread_manager.thread_id or not self.assistant_id:
             print("Thread ID or Assistant ID is not set.")
             return
@@ -162,6 +172,12 @@ class StreamingManager:
 
         self.thread_manager.add_message_to_thread(content)
 
+        # Check if there is an active run in the thread
+        active_run = self.get_active_run()
+        if active_run:
+            print(f"Thread {self.thread_manager.thread_id} already has an active run {active_run.id}. Waiting for it to complete.")
+            return
+
         with openai.beta.threads.runs.create_and_stream(
             thread_id=self.thread_manager.thread_id,
             assistant_id=self.assistant_id,
@@ -169,8 +185,7 @@ class StreamingManager:
             for event in stream:
                 print("Event received:", event)
                 if isinstance(event, ThreadRunRequiresAction):
-                    # Hypothetical adjustment: Access tool_call correctly based on the actual event structure
-                    tool_call_data = event.data  # This line is speculative and should be adjusted
+                    tool_call_data = event.data
                     event_handler.on_tool_call_created(tool_call_data)
                 elif isinstance(event, ThreadMessageDelta):
                     event_handler.on_text_delta(event.data.delta, None)
@@ -178,6 +193,14 @@ class StreamingManager:
                     print("\nInteraction completed.")
                     self.thread_manager.interaction_in_progress = False
                     self.thread_manager.end_of_interaction()
+                    
+                    # Retrieve the last message from the thread
+                    last_message = self.get_last_message()
+                    if last_message:
+                        print("Last message:", last_message)
+                        # Process the last message and continue the interaction logic flow
+                        self.process_last_message(last_message)
+                    
                     break  # Exit the loop once the interaction is complete
                 elif isinstance(event, ThreadRunFailed):
                     print("\nInteraction failed.")
@@ -185,3 +208,40 @@ class StreamingManager:
                     self.thread_manager.end_of_interaction()
                     break  # Exit the loop if the interaction fails
                 # Add more event types as needed based on your application's requirements
+
+    def on_tool_output_submitted(self, success):
+        if success:
+            print("Tool output submitted successfully. Continuing interaction...")
+            # Here, you can decide how to continue the interaction.
+            # For example, you might want to check for more events, or if the interaction is considered complete.
+        else:
+            print("Failed to submit tool output. Handling failure...")
+            # Handle failure accordingly, possibly by retrying or ending the interaction.
+
+    def get_active_run(self):
+        try:
+            thread = self.client.beta.threads.retrieve(self.thread_manager.thread_id)
+            runs = thread.runs
+            for run in runs:
+                if run.status in ["queued", "in_progress", "requires_action"]:
+                    return run
+        except Exception as e:
+            print(f"Failed to retrieve active run: {e}")
+        return None
+
+    def get_last_message(self):
+        try:
+            thread = self.client.beta.threads.retrieve(self.thread_manager.thread_id)
+            messages = thread.messages
+            if messages:
+                return messages[-1].content
+        except Exception as e:
+            print(f"Failed to retrieve the last message: {e}")
+        return None
+
+    def process_last_message(self, message):
+        # Implement your logic to process the last message and continue the interaction flow
+        print("Processing last message:", message)
+        # Add your specific logic here based on your application's requirements
+
+    # ...existing code...

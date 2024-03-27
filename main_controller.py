@@ -34,7 +34,7 @@ transcription = ""
 
 # Initialize ThreadManager and StreamingManager
 thread_manager = ThreadManager(openai_client)
-streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
+streaming_manager = StreamingManager(thread_manager, eleven_labs_manager, openai_client, assistant_id="asst_3D8tACoidstqhbw5JE2Et2st")
 
 def handle_detected_words(words):
     global is_recording, picture_mode, last_thread_id
