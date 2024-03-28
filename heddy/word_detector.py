@@ -12,6 +12,7 @@ class WordDetector:
         self.model_path = model_path or get_model_path()
         self.queue = Queue()
         self.thread = None
+        self.suspended = False
     
     def run(self,):
         print(f"Model Path: {self.model_path}")
@@ -34,7 +35,11 @@ class WordDetector:
             detected_words = [seg[0].lower().strip() for seg in phrase.segments(detailed=True)]  # Extract words
             print(f"Detected words: {detected_words}")  # Log for debugging
             for word in detected_words:
+                if self.suspended:
+                    continue
                 self.queue.put(word)
+            
+        
     def run_thread(self,):
         self.thread = Thread(target=self.run)
         self.thread.start()
@@ -42,6 +47,7 @@ class WordDetector:
     def listen(self, event: ApplicationEvent):
         if self.thread is None:
             self.run_thread()
+        self.suspended = False
         detected_words = self.queue.get()
         event.result = detected_words
         event.status = ProcessingStatus.SUCCESS
@@ -50,6 +56,7 @@ class WordDetector:
     def clear(self,):
         # HACK: this is hacky but should work
         self.queue = Queue()
+        self.suspended = True
         
         
 
