@@ -142,12 +142,13 @@ class MainController:
 
     # TODO: move to an interaction(?) module
     def handle_detected_word(self, word):
-        if "computer" in word:
+        if "computer" in word and not self.is_recording:
             return ApplicationEvent(ApplicationEventType.START_RECORDING)
-        if "snapshot" in word:
+        if "snapshot" in word and not self.picture_mode:
             return ApplicationEvent(ApplicationEventType.USE_SNAPSHOT)
-        if "reply" in word:
+        if "reply" in word and self.is_recording:
             return ApplicationEvent(ApplicationEventType.STOP_RECORDING)
+        return ApplicationEvent(ApplicationEventType.LISTEN)
     
     def run(self, event: ApplicationEvent):
         current_event = event
