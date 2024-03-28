@@ -14,7 +14,7 @@ from openai.types.beta.threads import Run, RequiredActionFunctionToolCall, TextD
 from openai.types.beta.assistant_stream_event import (
     ThreadRunRequiresAction, ThreadMessageDelta, ThreadRunCompleted,
     ThreadRunFailed, ThreadRunCancelling, ThreadRunCancelled, ThreadRunExpired, ThreadRunStepFailed,
-    ThreadRunStepCancelled)
+    ThreadRunStepCancelled, ThreadRunStepDelta)
 from dataclasses import dataclass
 
 class AssistantResultStatus(Enum):
@@ -158,6 +158,9 @@ class ThreadManager:
         # Call this method at the end of an interaction to reset the timer
         self.reset_last_interaction_time()
 
+
+
+
 class StreamingManager:
     def __init__(self, thread_manager, eleven_labs_manager, assistant_id=None):
         self.thread_manager = thread_manager
@@ -168,30 +171,63 @@ class StreamingManager:
     def set_event_handler(self, event_handler):
         self.event_handler = event_handler
     
+    def handle_required_action(self, event):
+        data = event.data
+        action = data.required_action
+        if action.type == "submit_tool_outputs":
+            calls = action.submit_tool_outputs.tool_calls
+            outputs = []
+            for call in calls:
+                func = call.function
+                if func.name == "send_text_message":
+                    outputs.append({
+                        "output": "Success!",
+                        "tool_call_id": call.id
+                    })
+                else:
+                    raise NotImplementedError(f"{func.name=}")
+            
+            return openai.beta.threads.runs.submit_tool_outputs_stream(
+                tool_outputs=outputs,
+                run_id=data.id,
+                thread_id=data.thread_id
+            )
+        raise NotImplementedError(f"{action.type=}")
+            
+    
     def handle_stream(self,):
         text = ""
-        with openai.beta.threads.runs.create_and_stream(
-            thread_id=self.thread_manager.thread_id,
-            assistant_id=self.assistant_id,
-        ) as stream:
-            for event in stream:
-                print("Event received:", event)
-                if isinstance(event, ThreadMessageDelta) and event.data.delta.content:
-                    delta = event.data.delta.content[0].text.value
-                    text +=  delta if delta is not None else ""
-                elif isinstance(event, ThreadRunCompleted):
-                    print("\nInteraction completed.")
-                    self.thread_manager.interaction_in_progress = False
-                    self.thread_manager.end_of_interaction()
-                    return True, text
-                     # Exit the loop once the interaction is complete
-                elif isinstance(event, ThreadRunFailed):
-                    print("\nInteraction failed.")
-                    self.thread_manager.interaction_in_progress = False
-                    self.thread_manager.end_of_interaction()
-                    return False, "Generic OpenAI Error"
-                    # Exit the loop if the interaction fails
-                # Add more event types as needed based on your application's requirements
+        streaming_manager = openai.beta.threads.runs.create_and_stream(
+                thread_id=self.thread_manager.thread_id,
+                assistant_id=self.assistant_id,
+            )
+        while True:
+            with streaming_manager as stream:
+                for event in stream:
+                    if isinstance(event, ThreadMessageDelta) and event.data.delta.content:
+                        delta = event.data.delta.content[0].text.value
+                        text +=  delta if delta is not None else ""
+                        continue
+                    if isinstance(event, ThreadRunStepDelta):
+                        continue
+                    
+                    print("Event received:", event)
+                    if isinstance(event, ThreadRunRequiresAction):
+                        streaming_manager = self.handle_required_action(event)
+                        break
+                    if isinstance(event, ThreadRunCompleted):
+                        print("\nInteraction completed.")
+                        self.thread_manager.interaction_in_progress = False
+                        self.thread_manager.end_of_interaction()
+                        return True, text
+                        # Exit the loop once the interaction is complete
+                    if isinstance(event, ThreadRunFailed):
+                        print("\nInteraction failed.")
+                        self.thread_manager.interaction_in_progress = False
+                        self.thread_manager.end_of_interaction()
+                        return False, "Generic OpenAI Error"
+                        # Exit the loop if the interaction fails
+                    # Add more event types as needed based on your application's requirements
 
     def handle_streaming_interaction(self, event: ApplicationEvent):
         if not self.assistant_id:
@@ -211,3 +247,38 @@ class StreamingManager:
             event.status = ProcessingStatus.SUCCESS
             event.result = text
         return event
+
+
+# hreadRunRequiresAction(
+#     data=Run(
+#         id='run_CxIXx8QhzXdKmxeuWD4w5wqD',
+#         assistant_id='asst_3D8tACoidstqhbw5JE2Et2st',
+#         cancelled_at=None,
+#         completed_at=None,
+#         created_at=1711643758,
+#         expires_at=1711644358,
+#         failed_at=None, file_ids=[],
+#         instructions='Keep answers to max 3 sentences.\n\ndon\'t use non-standard formatting, write it to be read aloud.\n\nmake funny noises in every sentence to drive home your point, really go to town on it.\n\nKeep texts using zapier to 65 characters or less - BUT\ndon\'t send a text unless I specifically say the word "text" and clearly am talking about am SMS in particular\n\nIgnore the word reply, and understand the beginning gets cut off, as this is a bug in my application\n\nUse 18th century slang as much as possible.\n',
+#         last_error=None,
+#         metadata={},
+#         model='gpt-4-turbo-preview',
+#         object='thread.run',
+#         required_action=RequiredAction(
+#             submit_tool_outputs=RequiredActionSubmitToolOutputs(
+#                 tool_calls=[
+#                     RequiredActionFunctionToolCall(
+#                         id='call_AFw0Va6fqQ5wpHiGYmZL5Goc',
+#                         function=Function(
+#                             arguments='{"message":"hello, world"}',
+#                             name='send_text_message'),
+#                             type='function')
+#                             ]),
+#             type='submit_tool_outputs'
+#         ),
+            
+#         started_at=1711643758,
+#         status='requires_action',
+#         thread_id='thread_9MnWmWO0RELGUIqAB6h5ttIM',
+#         tools=[CodeInterpreterTool(type='code_interpreter'),
+#                 RetrievalTool(type='retrieval'),
+#                 FunctionTool(function=FunctionDefinition(name='send_text_message', description='Sends a text message via Zapier', parameters={'type': 'object', 'properties': {'message': {'type': 'string', 'description': 'The message to send'}}, 'required': ['message']}), type='function')], usage=None), event='thread.run.requires_action')
