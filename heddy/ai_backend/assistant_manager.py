@@ -86,6 +86,10 @@ class EventHandler(AssistantEventHandler):
                     if output.type == "logs":
                         print(f"\n{output.logs}", flush=True)
 
+
+def tool_call_zapier(arguments):
+    return "Success!"
+
 class ThreadManager:
     def __init__(self, client):
         self.client = client
@@ -180,8 +184,9 @@ class StreamingManager:
             for call in calls:
                 func = call.function
                 if func.name == "send_text_message":
+                    output = tool_call_zapier(func.arguments)
                     outputs.append({
-                        "output": "Success!",
+                        "output": output,
                         "tool_call_id": call.id
                     })
                 else:
